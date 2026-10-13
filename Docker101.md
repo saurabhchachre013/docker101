@@ -18,6 +18,8 @@ A practical introduction to Docker: what it is, why it exists, how it works unde
 10. [Inspecting containers and reading logs](#inspecting-containers-and-reading-logs)
 11. [Building your own image (Dockerfile)](#building-your-own-image-dockerfile)
 12. [Image layers](#image-layers)
+13. [BuildKit: faster and safer builds](#buildkit-faster-and-safer-builds)
+14. [docker init](#docker-init)
 
 ---
 
@@ -719,3 +721,165 @@ docker history my-app:1.0
 > ```
 >
 > Once every step works by hand, put them into the Dockerfile and build with confidence.
+
+---
+
+## BuildKit: faster and safer builds
+
+### Problems with the classic builder
+
+The classic `docker build` engine works, but it has four pain points once your images get real:
+
+1. **Packages re-download on every build** — change a single line of code (or a dependency file) and the layer that installs packages is invalidated, so `pip install` / `npm install` / `apt-get install` downloads everything again from scratch. Rebuilds are slow even for tiny changes.
+2. **Secrets leak into the image** — credentials passed with `--build-arg` and used in a `RUN` step are recorded in plain text in the image history (`docker history` shows them). Putting them in `ENV` is no better: the value is baked into the image config and visible with `docker inspect`. Anyone who pulls the image can read them.
+3. **One image per CPU architecture** — an image built on an `amd64` laptop won't run natively on an `arm64` server (AWS Graviton, Raspberry Pi, Apple Silicon). You end up building and tagging a separate image for each platform.
+4. **Stages build one after another** — in a multi-stage Dockerfile, the classic builder runs every stage sequentially, even when the stages don't depend on each other, and it builds stages that the final image never uses.
+
+### What BuildKit fixes
+
+**BuildKit** is Docker's modern build engine and the default builder since Docker Engine 23.0. `docker buildx build` is its full-featured command (`docker build` also uses BuildKit by default). Each problem above has a matching feature:
+
+| Problem | BuildKit feature | How it helps |
+|---|---|---|
+| Packages re-download every build | **Cache mount** | Keeps the package manager's download cache on the build host between builds |
+| Secrets leak into image | **Secret mount** | Exposes the secret only while a single `RUN` step executes — never written to a layer or the history |
+| One image per architecture | **Multi-platform build** | Builds several architectures in one command and publishes them under one tag |
+| Stages build sequentially | **Parallel stages** | Builds independent stages at the same time and skips stages the target doesn't need |
+
+Start the Dockerfile with this line to use the latest stable Dockerfile syntax, which includes all the `--mount` features below:
+
+```dockerfile
+# syntax=docker/dockerfile:1
+```
+
+### Cache mount
+
+A cache mount stores a directory (such as pip's download cache) on the build host, outside the image. On the next build, even if the layer has to re-run, the package manager finds the files already downloaded and only fetches what changed.
+
+```dockerfile
+# syntax=docker/dockerfile:1
+FROM python:3.12-slim
+WORKDIR /app
+COPY requirements.txt .
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install -r requirements.txt
+COPY . .
+ENTRYPOINT ["python", "app.py"]
+```
+
+Build it with BuildKit:
+
+```bash
+docker buildx build -t my-app:1.0 .
+```
+
+> **Note:** The cache lives in the builder, not in the image, so it doesn't make the image bigger. That is also why `--no-cache-dir` is dropped here — we *want* pip to keep its cache.
+
+### Secret mount
+
+A secret mount makes a file available at `/run/secrets/<id>` only for the duration of one `RUN` step. Once that step finishes the secret is gone: it isn't in any layer, and `docker history` shows nothing.
+
+```dockerfile
+# syntax=docker/dockerfile:1
+FROM python:3.12-slim
+WORKDIR /app
+COPY requirements.txt .
+RUN --mount=type=secret,id=pip_token \
+    PIP_INDEX_URL="https://user:$(cat /run/secrets/pip_token)@pypi.example.com/simple" \
+    pip install -r requirements.txt
+```
+
+Pass the secret from a file on your machine at build time:
+
+```bash
+docker buildx build --secret id=pip_token,src=./pip_token.txt -t my-app:1.0 .
+```
+
+Confirm nothing leaked:
+
+```bash
+docker history my-app:1.0
+```
+
+> **Note:** Secret mounts are for **build-time** secrets (private package registries, git tokens). Secrets the application needs at **runtime** should be passed when the container starts (e.g. `-e`, an env file, or your platform's secret manager), never baked into the image.
+
+### Multi-platform build
+
+Build for several CPU architectures in one command. The result is a single tag that points to one image per platform; when someone runs `docker pull` or `docker run`, Docker automatically picks the variant matching their machine.
+
+```mermaid
+flowchart LR
+    A["Dockerfile"] --> B["docker buildx build<br/>--platform linux/amd64,linux/arm64"]
+    B --> C["linux/amd64 image"]
+    B --> D["linux/arm64 image"]
+    C --> E[("Registry<br/>my-app:1.0")]
+    D --> E
+    E -- "pull on x86 server" --> F["runs amd64"]
+    E -- "pull on ARM server" --> G["runs arm64"]
+
+    classDef file fill:#ECE6F5,stroke:#9A86C0,color:#3A2E52
+    classDef cmd fill:#E3ECF7,stroke:#7A9CC6,color:#26354A
+    classDef image fill:#DFF1EE,stroke:#6FA8A0,color:#24403C
+    classDef registry fill:#FBE9DF,stroke:#D19A7A,color:#4D3324
+    class A file
+    class B,F,G cmd
+    class C,D image
+    class E registry
+```
+
+```bash
+docker buildx build --platform linux/amd64,linux/arm64 -t <your-username>/my-app:1.0 --push .
+```
+
+> **Note:** `--push` sends the result straight to the registry, because the classic local image store can only hold one platform per tag. Building for a non-native architecture uses QEMU emulation, which Docker Desktop sets up for you; on a plain Linux engine you may need to create a builder first with `docker buildx create --use`.
+
+### Parallel stages
+
+BuildKit reads the whole Dockerfile as a dependency graph. Stages that don't depend on each other are built **at the same time**, and stages the final target never uses are **skipped entirely** — no extra configuration needed.
+
+```dockerfile
+# syntax=docker/dockerfile:1
+FROM node:22-slim AS frontend
+WORKDIR /web
+COPY web/ .
+RUN npm ci && npm run build
+
+FROM python:3.12-slim AS backend
+WORKDIR /app
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+FROM python:3.12-slim
+WORKDIR /app
+COPY --from=backend /usr/local/lib/python3.12/site-packages /usr/local/lib/python3.12/site-packages
+COPY --from=frontend /web/dist ./static
+COPY . .
+ENTRYPOINT ["python", "app.py"]
+```
+
+Here `frontend` and `backend` build in parallel; the final stage starts once both are done.
+
+---
+
+## docker init
+
+Writing a Dockerfile by hand is hard when you don't yet know the best practices — which base image is small enough, how to structure a multi-stage build, or how to run as a non-root user. `docker init` helps: it asks a few questions about your project and generates the starter files for you.
+
+```bash
+docker init
+```
+
+It asks for things like the application platform (Python, Node, Go, Java, Rust, PHP, ASP.NET…), the runtime version, the port the app listens on and the command that starts it. It then creates:
+
+| File | Purpose |
+|---|---|
+| `Dockerfile` | A multi-stage Dockerfile following current best practices |
+| `.dockerignore` | Keeps unneeded files (e.g. `.git`, virtualenvs) out of the build context |
+| `compose.yaml` | A Docker Compose file to run the app with `docker compose up` |
+| `README.Docker.md` | Short instructions for building and running the generated setup |
+
+> **Note:** `docker init` is **not an AI tool** — it fills in fixed templates from your answers. It won't produce a perfect Dockerfile for every project, so review the generated files and adjust them to your needs. Its value is cutting out the boilerplate and giving you a solid, best-practice starting point. It ships with Docker Desktop.
+
+
+Command vs Entrypoint
+
