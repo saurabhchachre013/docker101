@@ -17,6 +17,7 @@ A practical introduction to Docker: what it is, why it exists, how it works unde
 9. [Volumes and bind mounts](#volumes-and-bind-mounts)
 10. [Inspecting containers and reading logs](#inspecting-containers-and-reading-logs)
 11. [Building your own image (Dockerfile)](#building-your-own-image-dockerfile)
+12. [Image layers](#image-layers)
 
 ---
 
@@ -32,20 +33,29 @@ Docker solves this by packaging an application **together with everything it nee
 flowchart LR
     subgraph Without["❌ Without Docker"]
         direction TB
-        D1[Developer laptop<br/>Node 18, Python 3.10, MySQL 8.0]
-        D2[Test server<br/>Node 16, Python 3.8, MySQL 5.7]
-        D3[Production<br/>Node 20, Python 3.11, MySQL 8.4]
+        D1["Developer laptop<br/>Node 18, Python 3.10, MySQL 8.0"]
+        D2["Test server<br/>Node 16, Python 3.8, MySQL 5.7"]
+        D3["Production<br/>Node 20, Python 3.11, MySQL 8.4"]
     end
 
     subgraph With["✅ With Docker"]
         direction TB
-        I[(Same Docker image)]
-        I --> E1[Developer laptop]
-        I --> E2[Test server]
-        I --> E3[Production]
+        I[("Same Docker image")]
+        I --> E1["Developer laptop"]
+        I --> E2["Test server"]
+        I --> E3["Production"]
     end
 
     Without -. "version drift,<br/>manual setup" .-> With
+
+    classDef bad fill:#F6E1E4,stroke:#C98A93,color:#4A2E33
+    classDef image fill:#DFF1EE,stroke:#6FA8A0,color:#24403C
+    classDef env fill:#E6F0E0,stroke:#8AAE7A,color:#2F4227
+    class D1,D2,D3 bad
+    class I image
+    class E1,E2,E3 env
+    style Without fill:#FBF4F5,stroke:#C98A93,color:#4A2E33
+    style With fill:#F3F8F1,stroke:#8AAE7A,color:#2F4227
 ```
 
 **Key benefits**
@@ -74,21 +84,34 @@ This has two important consequences:
 flowchart TB
     subgraph VM["Virtual Machines"]
         direction TB
-        VA["App A<br/>Libs / Bins"] --- VGA[Guest OS]
-        VB["App B<br/>Libs / Bins"] --- VGB[Guest OS]
-        VGA --- HV[Hypervisor]
+        VA["App A<br/>Libs / Bins"] --- VGA["Guest OS"]
+        VB["App B<br/>Libs / Bins"] --- VGB["Guest OS"]
+        VGA --- HV["Hypervisor"]
         VGB --- HV
-        HV --- VHOS[Host OS]
-        VHOS --- VHW[Hardware]
+        HV --- VHOS["Host OS"]
+        VHOS --- VHW["Hardware"]
     end
 
     subgraph CT["Containers"]
         direction TB
-        CA["App A<br/>Libs / Bins"] --- DE[Docker Engine]
+        CA["App A<br/>Libs / Bins"] --- DE["Docker Engine"]
         CB["App B<br/>Libs / Bins"] --- DE
         DE --- CHOS["Host OS (shared kernel)"]
-        CHOS --- CHW[Hardware]
+        CHOS --- CHW["Hardware"]
     end
+
+    classDef app fill:#E6F0E0,stroke:#8AAE7A,color:#2F4227
+    classDef guest fill:#F6E1E4,stroke:#C98A93,color:#4A2E33
+    classDef engine fill:#E3ECF7,stroke:#7A9CC6,color:#26354A
+    classDef os fill:#F5EFDC,stroke:#C2AC6E,color:#463C1F
+    classDef hw fill:#E8EAEE,stroke:#8B93A1,color:#2F3542
+    class VA,VB,CA,CB app
+    class VGA,VGB guest
+    class HV,DE engine
+    class VHOS,CHOS os
+    class VHW,CHW hw
+    style VM fill:#FAFAFB,stroke:#B5BAC4,color:#2F3542
+    style CT fill:#FAFAFB,stroke:#B5BAC4,color:#2F3542
 ```
 
 | | Virtual Machine | Container |
@@ -119,29 +142,45 @@ flowchart LR
     subgraph Host["Docker Host"]
         DM[["Docker Daemon<br/>(dockerd)"]]
         subgraph Images
-            IM1[nginx]
-            IM2[mysql]
-            IM3[my-app]
+            IM1["nginx"]
+            IM2["mysql"]
+            IM3["my-app"]
         end
         subgraph Containers
-            CT1((nginx))
-            CT2((mysql))
-            CT3((my-app))
+            CT1(("nginx"))
+            CT2(("mysql"))
+            CT3(("my-app"))
         end
         DM --> Images
         Images --> Containers
     end
 
     subgraph Registry["Registry (Docker Hub / GHCR / ECR)"]
-        R1[nginx]
-        R2[mysql]
-        R3[...]
+        R1["nginx"]
+        R2["mysql"]
+        R3["..."]
     end
 
     C1 --> DM
     C2 --> DM
     C3 --> DM
     DM <-- "pull / push" --> Registry
+
+    classDef client fill:#ECE6F5,stroke:#9A86C0,color:#3A2E52
+    classDef engine fill:#E3ECF7,stroke:#7A9CC6,color:#26354A
+    classDef image fill:#DFF1EE,stroke:#6FA8A0,color:#24403C
+    classDef container fill:#E6F0E0,stroke:#8AAE7A,color:#2F4227
+    classDef registry fill:#FBE9DF,stroke:#D19A7A,color:#4D3324
+    class C1,C2,C3 client
+    class DM engine
+    class IM1,IM2,IM3 image
+    class CT1,CT2,CT3 container
+    class R1,R2,R3 registry
+    style Client fill:#F7F4FB,stroke:#9A86C0,color:#3A2E52
+    style Host fill:#F4F7FC,stroke:#7A9CC6,color:#26354A
+    style Images fill:#F1F9F7,stroke:#6FA8A0,color:#24403C
+    style Containers fill:#F3F8F1,stroke:#8AAE7A,color:#2F4227
+    style Registry fill:#FDF5F0,stroke:#D19A7A,color:#4D3324
 ```
 
 ### The layered stack
@@ -153,6 +192,15 @@ flowchart TB
     OS["Host Operating System (kernel)"]
     HW["Hardware Infrastructure"]
     APP --> DOCKER --> OS --> HW
+
+    classDef app fill:#E6F0E0,stroke:#8AAE7A,color:#2F4227
+    classDef engine fill:#E3ECF7,stroke:#7A9CC6,color:#26354A
+    classDef os fill:#F5EFDC,stroke:#C2AC6E,color:#463C1F
+    classDef hw fill:#E8EAEE,stroke:#8B93A1,color:#2F3542
+    class APP app
+    class DOCKER engine
+    class OS os
+    class HW hw
 ```
 
 ---
@@ -170,19 +218,28 @@ One image can be used to start **many** containers:
 
 ```mermaid
 flowchart LR
-    DF[Dockerfile] -- "docker build" --> IMG[(Image)]
-    IMG -- "docker run" --> C1((Container 1))
-    IMG -- "docker run" --> C2((Container 2))
-    IMG -- "docker run" --> C3((Container 3))
-    IMG -- "docker push" --> REG[(Registry)]
+    DF["Dockerfile"] -- "docker build" --> IMG[("Image")]
+    IMG -- "docker run" --> C1(("Container 1"))
+    IMG -- "docker run" --> C2(("Container 2"))
+    IMG -- "docker run" --> C3(("Container 3"))
+    IMG -- "docker push" --> REG[("Registry")]
     REG -- "docker pull" --> IMG
+
+    classDef file fill:#ECE6F5,stroke:#9A86C0,color:#3A2E52
+    classDef image fill:#DFF1EE,stroke:#6FA8A0,color:#24403C
+    classDef container fill:#E6F0E0,stroke:#8AAE7A,color:#2F4227
+    classDef registry fill:#FBE9DF,stroke:#D19A7A,color:#4D3324
+    class DF file
+    class IMG image
+    class C1,C2,C3 container
+    class REG registry
 ```
 
 ---
 
 ## Installing Docker
 
-Follow the official guide for your platform: **https://docs.docker.com/engine/install/**
+Follow the official guide for your platform: **[https://docs.docker.com/engine/install/](https://docs.docker.com/engine/install/)**
 
 Quick install on most Linux distributions (official convenience script):
 
@@ -322,6 +379,7 @@ docker system prune
 | `docker rmi` | Remove an image |
 | `docker inspect` | Show detailed configuration (JSON) |
 | `docker logs` | Show container output |
+| `docker history` | Show the layers an image is built from |
 | `docker system prune` | Remove unused data |
 
 ### Container lifecycle
@@ -336,6 +394,15 @@ stateDiagram-v2
     Running --> Stopped: docker stop
     Stopped --> Running: docker start
     Stopped --> [*]: docker rm
+
+    classDef created fill:#ECE6F5,stroke:#9A86C0,color:#3A2E52
+    classDef running fill:#E6F0E0,stroke:#8AAE7A,color:#2F4227
+    classDef paused fill:#F5EFDC,stroke:#C2AC6E,color:#463C1F
+    classDef stopped fill:#F6E1E4,stroke:#C98A93,color:#4A2E33
+    class Created created
+    class Running running
+    class Paused paused
+    class Stopped stopped
 ```
 
 ---
@@ -366,17 +433,28 @@ Containers run on an isolated network. To reach an application inside a containe
 
 ```mermaid
 flowchart LR
-    U[Browser / Client] -- "localhost:5000" --> HP["Host port 5000"]
+    U["Browser / Client"] -- "localhost:5000" --> HP["Host port 5000"]
     HP -- "maps to" --> CP["Container port 80"]
     subgraph C["Container: nginx"]
-        CP --> APP[Web server]
+        CP --> APP["Web server"]
     end
 
-    U2[DB client] -- "localhost:3434" --> HP2["Host port 3434"]
+    U2["DB client"] -- "localhost:3434" --> HP2["Host port 3434"]
     HP2 -- "maps to" --> CP2["Container port 3306"]
     subgraph D["Container: mysql"]
-        CP2 --> DB[(MySQL)]
+        CP2 --> DB[("MySQL")]
     end
+
+    classDef client fill:#ECE6F5,stroke:#9A86C0,color:#3A2E52
+    classDef host fill:#F5EFDC,stroke:#C2AC6E,color:#463C1F
+    classDef port fill:#E3ECF7,stroke:#7A9CC6,color:#26354A
+    classDef app fill:#E6F0E0,stroke:#8AAE7A,color:#2F4227
+    class U,U2 client
+    class HP,HP2 host
+    class CP,CP2 port
+    class APP,DB app
+    style C fill:#F3F8F1,stroke:#8AAE7A,color:#2F4227
+    style D fill:#F3F8F1,stroke:#8AAE7A,color:#2F4227
 ```
 
 Expose a web server running on port `80` inside the container at port `5000` on the host:
@@ -413,6 +491,14 @@ flowchart LR
     end
     HD <-- "bind mount" --> P1
     HD <-. "reuse same data<br/>after A is removed" .-> P2
+
+    classDef data fill:#F5EFDC,stroke:#C2AC6E,color:#463C1F
+    classDef path fill:#E3ECF7,stroke:#7A9CC6,color:#26354A
+    class HD,VOL data
+    class P1,P2 path
+    style Host fill:#FBF8EF,stroke:#C2AC6E,color:#463C1F
+    style C1 fill:#F3F8F1,stroke:#8AAE7A,color:#2F4227
+    style C2 fill:#F3F8F1,stroke:#8AAE7A,color:#2F4227
 ```
 
 There are two main ways to persist data:
@@ -486,7 +572,7 @@ docker logs --tail 100 <container>
 
 ## Building your own image (Dockerfile)
 
-Docker Hub (https://hub.docker.com) has ready-made images for most popular software. When no suitable image exists for your application, you build your own using a **Dockerfile** — a plain text file containing step-by-step instructions. Each instruction creates a new **layer** in the image, and layers are cached to make rebuilds fast.
+Docker Hub ([https://hub.docker.com](https://hub.docker.com)) has ready-made images for most popular software. When no suitable image exists for your application, you build your own using a **Dockerfile** — a plain text file containing step-by-step instructions.
 
 ### Common Dockerfile instructions
 
@@ -530,13 +616,22 @@ ENTRYPOINT ["python", "app.py"]
 
 ```mermaid
 flowchart LR
-    A[Write Dockerfile] --> B["docker build"]
-    B --> C[(Local image)]
+    A["Write Dockerfile"] --> B["docker build"]
+    B --> C[("Local image")]
     C --> D["docker run<br/>(test locally)"]
     C --> E["docker tag"]
     E --> F["docker push"]
-    F --> G[(Registry<br/>Docker Hub / GHCR / ECR)]
+    F --> G[("Registry<br/>Docker Hub / GHCR / ECR")]
     G --> H["docker pull<br/>on any server"]
+
+    classDef file fill:#ECE6F5,stroke:#9A86C0,color:#3A2E52
+    classDef cmd fill:#E3ECF7,stroke:#7A9CC6,color:#26354A
+    classDef image fill:#DFF1EE,stroke:#6FA8A0,color:#24403C
+    classDef registry fill:#FBE9DF,stroke:#D19A7A,color:#4D3324
+    class A file
+    class B,D,E,F,H cmd
+    class C image
+    class G registry
 ```
 
 Build the image from the Dockerfile in the current directory and give it a name and tag:
@@ -570,3 +665,57 @@ docker push <your-username>/my-app:1.0
 ```
 
 Anyone with access can now pull and run the exact same image on any machine with Docker installed.
+
+---
+
+## Image layers
+
+A Docker image is not one big blob — it is a **stack of read-only layers**. Each instruction in the Dockerfile adds a new layer on top of the previous one (`RUN`, `COPY` and `ADD` add files; instructions like `ENV`, `EXPOSE` and `ENTRYPOINT` add metadata only). When you start a container, Docker places a thin **writable layer** on top; everything the running container changes lives there, and the image layers underneath stay untouched.
+
+```mermaid
+flowchart TB
+    W["✏️ Container layer (writable)<br/>created by docker run"]
+    L5["ENTRYPOINT python app.py"]
+    L4["COPY . ."]
+    L3["RUN pip install -r requirements.txt"]
+    L2["COPY requirements.txt ."]
+    L1["WORKDIR /app"]
+    L0["FROM python:3.12-slim (base image layers)"]
+    W --- L5 --- L4 --- L3 --- L2 --- L1 --- L0
+
+    classDef writable fill:#E6F0E0,stroke:#8AAE7A,color:#2F4227,stroke-dasharray:5 3
+    classDef layer fill:#DFF1EE,stroke:#6FA8A0,color:#24403C
+    classDef base fill:#E3ECF7,stroke:#7A9CC6,color:#26354A
+    class W writable
+    class L1,L2,L3,L4,L5 layer
+    class L0 base
+```
+
+**Why layers matter**
+
+- **Caching** — Docker reuses unchanged layers on rebuild. As soon as one layer changes, that layer and **every layer after it** are rebuilt. This is why the example copies `requirements.txt` and installs dependencies *before* copying the source code: editing your code doesn't force a full reinstall of every package.
+- **Sharing** — images built on the same base image share those base layers on disk and when pulling, saving space and bandwidth.
+- **Size** — every layer adds to the image size, so combine related commands (e.g. `apt-get update && apt-get install -y ...`) and clean up within the same `RUN`.
+
+See the layers an image is made of, with the instruction and size of each:
+
+```bash
+docker history my-app:1.0
+```
+
+> 💡 **Pro tip (my own practice):** Before building an image and pushing it to a registry such as ECR, run the Dockerfile's commands by hand, one at a time, inside a container started from the same base image. This shows you exactly what each layer does, and you catch missing packages, wrong paths and permission errors early — before a slow build-and-push cycle.
+>
+> Start a throwaway container from the base image with your project folder mounted:
+>
+> ```bash
+> docker run -it --rm -v "$PWD":/app -w /app python:3.12-slim bash
+> ```
+>
+> Then, inside the container, run each `RUN` step from your Dockerfile in order and check the result before moving on:
+>
+> ```bash
+> pip install --no-cache-dir -r requirements.txt
+> python app.py
+> ```
+>
+> Once every step works by hand, put them into the Dockerfile and build with confidence.
